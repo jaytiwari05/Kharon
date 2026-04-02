@@ -775,6 +775,12 @@ const (
 )
 
 const (
+	LINK_TYPE_SMB   int = 1
+	LINK_TYPE_TCP   int = 2
+	UNLINK_TYPE     int = 3
+)
+
+const (
 	COMMAND_TUNNEL_START_TCP = 62
 	COMMAND_TUNNEL_START_UDP = 63
 	COMMAND_TUNNEL_WRITE_TCP = 64
