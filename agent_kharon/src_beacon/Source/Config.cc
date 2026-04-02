@@ -48,6 +48,20 @@ auto DECLFN GetConfig( KHARON_CONFIG* Cfg ) -> VOID {
     Cfg->KillDate.ExitProc   = TRUE;
     Cfg->KillDate.Enabled    = KH_KILLDATE_ENABLED;
 
+#if PROFILE_C2 == PROFILE_SMB
+    // SMB pipe name as stack byte array (NOT static — .data section is stripped from PIC)
+    BYTE smb_pipe_bytes[] = SMB_PIPE_NAME;
+    // Copy to heap so it persists after GetConfig returns
+    ULONG smb_pipe_len = sizeof(smb_pipe_bytes);
+    Self->Tsp->Pipe.Name = (PCHAR)KhAlloc( smb_pipe_len );
+    Mem::Copy( Self->Tsp->Pipe.Name, smb_pipe_bytes, smb_pipe_len );
+    Self->Ntdll.DbgPrint( "[SMB-CFG] Pipe name set: %s (len=%d, bytes[0]=0x%02x)\n",
+        Self->Tsp->Pipe.Name, smb_pipe_len, smb_pipe_bytes[0] );
+#else
+    Self->Ntdll.DbgPrint( "[SMB-CFG] PROFILE_C2 is NOT SMB (value=0x%x)\n", PROFILE_C2 );
+#endif
+
+#if PROFILE_C2 == PROFILE_HTTP
     // http proxy
     Cfg->Http.Proxy.Enabled  = HTTP_PROXY_ENABLED;
     Cfg->Http.Proxy.Url      = HTTP_PROXY_URL;
@@ -267,4 +281,5 @@ auto DECLFN GetConfig( KHARON_CONFIG* Cfg ) -> VOID {
             }
         }
     }
+#endif // PROFILE_C2 == PROFILE_HTTP
 }

