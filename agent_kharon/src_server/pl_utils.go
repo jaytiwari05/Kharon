@@ -48,6 +48,8 @@ type KharonData struct {
 		SecurebootEnabled bool  `json:"secureboot_enabled"`
 	} `json:"machine"`
 
+	PipeName string `json:"pipe_name"`
+
 	Session struct {
 		AgentIdStr string `json:"agent_id_str"`
 		AgentIdInt uint32 `json:"agent_id_int"`

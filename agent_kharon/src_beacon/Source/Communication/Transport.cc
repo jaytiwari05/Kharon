@@ -111,6 +111,9 @@ auto DECLFN Transport::Checkin(
     // encryption key
     Self->Pkg->Bytes( CheckinPkg, Self->Crp->LokKey, sizeof( Self->Crp->LokKey ) );
 
+    // SMB pipe name (empty string for HTTP beacons)
+    Self->Pkg->Str( CheckinPkg, Self->Tsp->Pipe.Name ? Self->Tsp->Pipe.Name : (PCHAR)"" );
+
     //
     // send the packet
     //

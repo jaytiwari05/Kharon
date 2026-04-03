@@ -622,16 +622,9 @@ func CreateAgent(initialData []byte) (ax.AgentData, ax.ExtenderAgent, error) {
 		khcfg KharonData
 	)
 
-	fmt.Println("=== DEBUG RAW DATA ===")
-	fmt.Printf("Total bytes received: %d\n", len(initialData))
-	fmt.Printf("Hex dump:\n%s", hex.Dump(initialData))
-	fmt.Printf("\n")
-	fmt.Println("======================")
-
 	packer := CreatePacker(initialData)
 
 	command := packer.ParseInt8()
-	fmt.Printf("Command: 0x%x\n", command)
 	if command != 0xf1 {
 		return agent, ModuleObject.ext, errors.New("error agent checkin data")
 	}
@@ -826,19 +819,17 @@ func CreateAgent(initialData []byte) (ax.AgentData, ax.ExtenderAgent, error) {
 	fmt.Printf("VBS/HVCI Status: %v\n", khcfg.Machine.VbsHvci)
 
 	khcfg.Machine.DseStatus = uint32(packer.ParseInt32())
-	fmt.Printf("DSE Status: %v\n", khcfg.Machine.DseStatus)
 
 	khcfg.Machine.TestsignEnabled = packer.ParseInt32() != 0
 	fmt.Printf("Test Signing Enabled: %v\n", khcfg.Machine.TestsignEnabled)
 
 	khcfg.Machine.DebugmodeEnabled = packer.ParseInt32() != 0
-	fmt.Printf("Debug Mode Enabled: %v\n", khcfg.Machine.DebugmodeEnabled)
-
 	khcfg.Machine.SecurebootEnabled = packer.ParseInt32() != 0
-	fmt.Printf("Secure Boot Enabled: %v\n", khcfg.Machine.SecurebootEnabled)
 
 	key := packer.ParseBytes()
-	fmt.Printf("Session Key: %v\n", key)
+
+	// SMB pipe name (empty for HTTP beacons)
+	khcfg.PipeName = packer.ParseString()
 
 	process := ConvertCpToUTF8(khcfg.Session.ImgPath, int(khcfg.Session.Acp))
 	if strings.Contains(process, "\\") {
@@ -2032,38 +2023,30 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 	}
 
 	taskCount := packer.ParseInt32()
-	fmt.Printf("[PTR-DBG] ProcessTasksResult: agent=%s, taskCount=%d, packerSize=%d\n", agentData.Id, taskCount, packer.Size())
-
 	for taskIndex := uint(0); taskIndex < taskCount && packer.CheckPacker([]string{"int"}); taskIndex++ {
 		dataType := packer.ParseInt32()
-		fmt.Printf("[PTR-DBG]   task[%d]: dataType=0x%x, remaining=%d\n", taskIndex, dataType, packer.Size())
 
 		if dataType == uint(MSG_QUICK) || dataType == uint(MSG_OUT) {
 			if len(packer.buffer) < 16 {
-				fmt.Printf("[PTR-DBG]   MSG_QUICK: buffer too small (%d)\n", len(packer.buffer))
 				return outTasks
 			}
 
 			TaskUID := string(packer.ParsePad(36))
 			if len(TaskUID) < 8 {
-				fmt.Printf("[PTR-DBG]   MSG_QUICK: TaskUID too short\n")
 				return outTasks
 			}
 			task := taskData
 			task.TaskId = TaskUID[:8]
-			fmt.Printf("[PTR-DBG]   MSG_QUICK: TaskId=%s, remaining=%d\n", task.TaskId, packer.Size())
 
 			if dataType == 0x7 && packer.CheckPacker([]string{"int"}) {
 				packer.ParseInt32()
 			}
 
 			if false == packer.CheckPacker([]string{"int", "array"}) {
-				fmt.Printf("[PTR-DBG]   MSG_QUICK: CheckPacker(int,array) FAILED, remaining=%d\n", packer.Size())
 				return outTasks
 			}
 
 			outputType := packer.ParseInt32()
-			fmt.Printf("[PTR-DBG]   MSG_QUICK: outputType=%d\n", outputType)
 
 			switch outputType {
 			case CALLBACK_ERROR:
@@ -2146,15 +2129,12 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 			outTasks = append(outTasks, task)
 
 		} else if dataType == uint(PROFILE_WEB) || dataType == uint(PROFILE_SMB) { // web || smb
-			fmt.Printf("[PTR-DBG]   PROFILE_SMB/WEB entry, checking array...\n")
 
 			if false == packer.CheckPacker([]string{"array"}) {
-				fmt.Printf("[PTR-DBG]   CheckPacker(array) FAILED, remaining=%d\n", packer.Size())
 				return outTasks
 			}
 
 			innerBytes := packer.ParseBytes()
-			fmt.Printf("[PTR-DBG]   inner bytes=%d\n", len(innerBytes))
 			cmd_packer := CreatePacker(innerBytes)
 			if cmd_packer.CheckPacker([]string{"array", "word"}) {
 
@@ -2166,7 +2146,6 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 				task.TaskId = TaskUID[:8]
 
 				commandId := int16(cmd_packer.ParseInt16())
-				fmt.Printf("[PTR-DBG]   PROFILE_SMB: TaskUID=%s, commandId=%d\n", task.TaskId, commandId)
 					switch commandId {
 
 				case TASK_JOB:
@@ -2887,7 +2866,6 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 										// but CreateAgent assigns a random agent ID. Exchange needs the original.
 										if len(childData) >= 8 {
 											PivotUUIDMap[childAgentId] = string(childData[:8])
-											fmt.Printf("[PIVOT-DBG] PivotUUIDMap[%s] = %s\n", childAgentId, string(childData[:8]))
 										}
 
 										actualParent := agentData.Id
@@ -2895,13 +2873,8 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 											actualParent = owner
 											delete(TaskOwnerMap, task.TaskId)
 										}
-										fmt.Printf("[PIVOT-DBG] TsPivotCreate: parent=%s, child=%s (agentData=%s, taskId=%s)\n",
-											actualParent, childAgentId, agentData.Id, task.TaskId)
-
 										err = ts.TsPivotCreate(task.TaskId, actualParent, childAgentId, "", false)
-										if err != nil {
-											fmt.Printf("[PIVOT-DBG] TsPivotCreate ERROR: %v\n", err)
-										}
+										_ = err
 
 										task.Message = fmt.Sprintf("----- New SMB pivot agent: [%s]===[%s] -----", actualParent, childAgentId)
 										task.MessageType = MESSAGE_SUCCESS
