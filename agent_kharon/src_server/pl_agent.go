@@ -1909,6 +1909,22 @@ func CreateTask(ts Teamserver, agent ax.AgentData, args map[string]any) (ax.Task
 			array = []interface{}{TASK_POSTEX, POSTEX_ACTION_INJECT, len(bofData), bofData, len(bofArgs), bofArgs}
 		}
 
+	case "list_pipe":
+		filter := ""
+		if f, ok := args["filter"].(string); ok {
+			filter = f
+		}
+		bofData, err = LoadExtModule("src_core", "list_pipe", "x64")
+		if err != nil {
+			goto RET
+		}
+		bofParam, err = PackExtData(PackExtDataWChar(filter, agent.ACP))
+		if err != nil {
+			goto RET
+		}
+		array = []interface{}{TASK_EXEC_BOF, len(bofData), bofData, PIPE_LIST, len(bofParam), bofParam}
+		messageData.Text = fmt.Sprintf("Listing pipes matching: *%s*", filter)
+
 	case "link":
 		switch subcommand {
 		case "smb":

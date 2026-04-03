@@ -244,6 +244,11 @@ function RegisterCommands(listenerType)
     let cmd_execute = ax.create_command("execute", "Execute Beacon Object Files or post-exploitation shellcode modules");
     cmd_execute.addSubCommands([cmd_exec_bof, cmd_exec_postex]);
 
+    /// LIST PIPE
+
+    let cmd_list_pipe = ax.create_command("list_pipe", "List named pipes on target (wildcard filter)", "list_pipe kharon", "Task: enumerate named pipes");
+    cmd_list_pipe.addArgString("filter", false, "Pipe name filter (substring match)");
+
     /// LINK
 
     let cmd_link_smb = ax.create_command("smb", "Link to a child beacon over SMB named pipe", "link smb 10.10.10.5 kharon_c2", "Task: link SMB pivot");
@@ -263,7 +268,7 @@ function RegisterCommands(listenerType)
             cmd_info, cmd_config, cmd_exit, cmd_selfdel, cmd_execute,
             cmd_fs, cmd_ps, cmd_token, cmd_scinject, cmd_upload,
             cmd_download, cmd_socks, cmd_rportfwd,
-            cmd_link, cmd_unlink
+            cmd_link, cmd_unlink, cmd_list_pipe
         ]);
 
         return { commands_windows: commands_external }
@@ -273,7 +278,7 @@ function RegisterCommands(listenerType)
         let commands_internal = ax.create_commands_group("kharon", [
             cmd_info, cmd_config, cmd_exit, cmd_selfdel, cmd_execute,
             cmd_fs, cmd_ps, cmd_token, cmd_scinject, cmd_upload,
-            cmd_download, cmd_link, cmd_unlink
+            cmd_download, cmd_link, cmd_unlink, cmd_list_pipe
         ]);
 
         return { commands_windows: commands_internal }
