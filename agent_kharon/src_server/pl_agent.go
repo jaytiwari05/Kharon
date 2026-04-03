@@ -1943,6 +1943,12 @@ func CreateTask(ts Teamserver, agent ax.AgentData, args map[string]any) (ax.Task
 			// CmdID is read as Int16 by Jobs::Create (line 34 of Jobs.cc)
 			array = []interface{}{TASK_PIVOT, int8(10), fullPipePath}
 
+			// Pre-generate TaskId so we can track which agent owns this link task.
+			// When the Link result comes back through a relayed PROFILE_SMB response,
+			// agentData is the outer HTTP parent — TaskOwnerMap lets us find the real parent.
+			taskData.TaskId = fmt.Sprintf("%08x", mrand.Uint32())
+			TaskOwnerMap[taskData.TaskId] = agent.Id
+
 			messageData.Text = fmt.Sprintf("Linking to SMB pipe: %s", fullPipePath)
 
 		default:
@@ -2871,10 +2877,19 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 											PivotUUIDMap[childAgentId] = string(childData[:8])
 										}
 
-										err = ts.TsPivotCreate(task.TaskId, agentData.Id, childAgentId, "", false)
-										_ = err
+										// Determine actual parent: the agent that received the link task.
+									// When processing relayed PROFILE_SMB data, agentData is the outer
+									// HTTP parent — TaskOwnerMap has the real parent (the SMB child).
+									actualParent := agentData.Id
+									if owner, ok := TaskOwnerMap[task.TaskId]; ok {
+										actualParent = owner
+										delete(TaskOwnerMap, task.TaskId)
+									}
 
-										task.Message = fmt.Sprintf("----- New SMB pivot agent: [%s]===[%s] -----", agentData.Id, childAgentId)
+									err = ts.TsPivotCreate(task.TaskId, actualParent, childAgentId, "", false)
+									_ = err
+
+									task.Message = fmt.Sprintf("----- New SMB pivot agent: [%s]===[%s] -----", actualParent, childAgentId)
 										task.MessageType = MESSAGE_SUCCESS
 									}
 								}

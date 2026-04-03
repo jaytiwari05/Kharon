@@ -147,6 +147,12 @@ var (
 	// PivotUUIDMap maps server-assigned agentId → original beacon UUID prefix (first 8 chars).
 	// Needed because CreateAgent generates a random ID unrelated to the beacon's SmbUUID.
 	PivotUUIDMap = make(map[string]string)
+
+	// TaskOwnerMap maps taskId → agentId for link commands.
+	// When ProcessTasksResult sees a TASK_PIVOT Link inside a relayed PROFILE_SMB response,
+	// agentData is the outer HTTP parent — not the SMB child that actually did the link.
+	// This map lets us find the real parent.
+	TaskOwnerMap = make(map[string]string)
 )
 
 func (p *PluginAgent) GetExtender() ax.ExtenderAgent {
