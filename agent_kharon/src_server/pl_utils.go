@@ -847,6 +847,10 @@ const (
 )
 
 const (
+	PIPE_LIST int = 38
+)
+
+const (
 	EXIT_THREAD  int8 = 20
 	EXIT_PROCESS int8 = 21
 )
