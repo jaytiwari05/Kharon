@@ -273,7 +273,7 @@ function RegisterCommands(listenerType)
         let commands_internal = ax.create_commands_group("kharon", [
             cmd_info, cmd_config, cmd_exit, cmd_selfdel, cmd_execute,
             cmd_fs, cmd_ps, cmd_token, cmd_scinject, cmd_upload,
-            cmd_download
+            cmd_download, cmd_link, cmd_unlink
         ]);
 
         return { commands_windows: commands_internal }

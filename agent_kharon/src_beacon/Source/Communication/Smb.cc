@@ -171,7 +171,8 @@ auto Transport::SmbGet(
     SMB_PROFILE_DATA* Current = static_cast<SMB_PROFILE_DATA*>( this->Pipe.Node );
 
     while ( Current ) {
-        if ( Current->SmbUUID && Str::CompareA( Current->SmbUUID, SmbUUID ) == 0 ) {
+        ULONG matchLen = Str::LengthA( SmbUUID );
+        if ( Current->SmbUUID && Mem::Cmp( (PBYTE)Current->SmbUUID, (PBYTE)SmbUUID, matchLen ) ) {
             return Current;
         }
         Current = Current->Next;
