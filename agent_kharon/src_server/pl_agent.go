@@ -2875,21 +2875,23 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 										// but CreateAgent assigns a random agent ID. Exchange needs the original.
 										if len(childData) >= 8 {
 											PivotUUIDMap[childAgentId] = string(childData[:8])
+											fmt.Printf("[PIVOT-DBG] PivotUUIDMap[%s] = %s\n", childAgentId, string(childData[:8]))
 										}
 
-										// Determine actual parent: the agent that received the link task.
-									// When processing relayed PROFILE_SMB data, agentData is the outer
-									// HTTP parent — TaskOwnerMap has the real parent (the SMB child).
-									actualParent := agentData.Id
-									if owner, ok := TaskOwnerMap[task.TaskId]; ok {
-										actualParent = owner
-										delete(TaskOwnerMap, task.TaskId)
-									}
+										actualParent := agentData.Id
+										if owner, ok := TaskOwnerMap[task.TaskId]; ok {
+											actualParent = owner
+											delete(TaskOwnerMap, task.TaskId)
+										}
+										fmt.Printf("[PIVOT-DBG] TsPivotCreate: parent=%s, child=%s (agentData=%s, taskId=%s)\n",
+											actualParent, childAgentId, agentData.Id, task.TaskId)
 
-									err = ts.TsPivotCreate(task.TaskId, actualParent, childAgentId, "", false)
-									_ = err
+										err = ts.TsPivotCreate(task.TaskId, actualParent, childAgentId, "", false)
+										if err != nil {
+											fmt.Printf("[PIVOT-DBG] TsPivotCreate ERROR: %v\n", err)
+										}
 
-									task.Message = fmt.Sprintf("----- New SMB pivot agent: [%s]===[%s] -----", actualParent, childAgentId)
+										task.Message = fmt.Sprintf("----- New SMB pivot agent: [%s]===[%s] -----", actualParent, childAgentId)
 										task.MessageType = MESSAGE_SUCCESS
 									}
 								}
