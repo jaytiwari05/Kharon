@@ -4,6 +4,7 @@ import (
 	// "database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand"
 	"time"
@@ -239,14 +240,25 @@ func (ext *ExtenderAgent) PivotPackData(pivotId string, data []byte) (ax.TaskDat
 	childId := pivotId
 	if ModuleObject != nil && ModuleObject.ts != nil {
 		_, _, cid := ModuleObject.ts.TsGetPivotInfoById(pivotId)
+		fmt.Printf("[PIVOT-DBG] PivotPackData: pivotId=%s, cid=%s\n", pivotId, cid)
 		if cid != "" {
 			if origUUID, ok := PivotUUIDMap[cid]; ok {
 				childId = origUUID
+				fmt.Printf("[PIVOT-DBG] PivotPackData: resolved %s → %s (from PivotUUIDMap)\n", cid, origUUID)
 			} else {
 				childId = cid
+				fmt.Printf("[PIVOT-DBG] PivotPackData: no PivotUUIDMap entry for %s, using cid\n", cid)
 			}
 		}
 	}
+	fmt.Printf("[PIVOT-DBG] PivotPackData: final childId=%s, dataLen=%d\n", childId, len(data))
+
+	// Don't send Exchange when child has no pending data — the beacon rejects
+	// empty Exchange tasks and it wastes a pipe cycle.
+	if len(data) == 0 {
+		return ax.TaskData{}, fmt.Errorf("no data for child")
+	}
+
 	packData, err := PackPivotTasks(childId, data)
 	if err != nil {
 		return ax.TaskData{}, err
