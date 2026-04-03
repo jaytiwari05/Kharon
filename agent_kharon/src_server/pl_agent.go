@@ -2910,34 +2910,13 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 
 						case 20: // Action::Pivot::Exchange — child response relayed by parent
 							if cmd_packer.CheckPacker([]string{"int", "array"}) {
-								profileType := cmd_packer.ParseInt32()
+								_ = cmd_packer.ParseInt32() // profileType
 								childResp := cmd_packer.ParseBytes()
 
-								dumpLen := len(childResp)
-								if dumpLen > 50 { dumpLen = 50 }
-								fmt.Printf("[EXCH-DBG] case20: profileType=0x%x, respLen=%d, first50=%x\n",
-									profileType, len(childResp), childResp[:dumpLen])
-
-								if len(childResp) >= 37 {
-									origPrefix := string(childResp[:8])
-									childAgentId := ""
-									for serverId, origUUID := range PivotUUIDMap {
-										if origUUID == origPrefix {
-											childAgentId = serverId
-											break
-										}
-									}
-									fmt.Printf("[EXCH-DBG] origPrefix='%s', childAgentId='%s'\n", origPrefix, childAgentId)
-
-									if childAgentId != "" {
-										taskPayload := childResp[37:]
-										fmt.Printf("[EXCH-DBG] taskPayload first8=%x (len=%d)\n", taskPayload[:min(8, len(taskPayload))], len(taskPayload))
-										_ = ts.TsAgentProcessData(childAgentId, taskPayload)
-										_ = ts.TsAgentSetTick(childAgentId, "")
-									} else {
-										// Fallback: try InternalHandler for checkins
-										_, _ = ts.TsListenerInteralHandler("c17a905a", childResp)
-									}
+								if len(childResp) > 0 {
+									// childResp is encrypted PostJobs from the child beacon.
+									// Use InternalHandler which decrypts with the child's stored key.
+									_, _ = ts.TsListenerInteralHandler("c17a905a", childResp)
 								}
 							}
 						}
