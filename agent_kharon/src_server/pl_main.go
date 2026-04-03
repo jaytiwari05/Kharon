@@ -223,13 +223,19 @@ func (ext *ExtenderAgent) PackTasks(agentData ax.AgentData, tasks []ax.TaskData)
 }
 
 func (ext *ExtenderAgent) PivotPackData(pivotId string, data []byte) (ax.TaskData, error) {
-	// Resolve ChildAgentId from pivot table — the beacon identifies children
-	// by their AgentId (8 chars), not the server's task-based pivotId.
+	// Resolve the beacon's original UUID from the pivot table.
+	// The beacon stores children by SmbUUID (first 8 chars of checkin UUID),
+	// but the server assigns a random agent ID. We stored the mapping at Link time.
 	childId := pivotId
 	if ModuleObject != nil && ModuleObject.ts != nil {
 		_, _, cid := ModuleObject.ts.TsGetPivotInfoById(pivotId)
 		if cid != "" {
-			childId = cid
+			origUUID, err := ModuleObject.ts.TsExtenderDataLoad("kharon_pivot_map", cid)
+			if err == nil && len(origUUID) > 0 {
+				childId = string(origUUID)
+			} else {
+				childId = cid
+			}
 		}
 	}
 	packData, err := PackPivotTasks(childId, data)

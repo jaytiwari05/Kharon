@@ -2860,6 +2860,14 @@ func ProcessTasksResult(ts Teamserver, agentData ax.AgentData, taskData ax.TaskD
 										task.Message = fmt.Sprintf("Link failed: %v", err)
 										task.MessageType = MESSAGE_ERROR
 									} else {
+										// Store mapping: serverAgentId → original UUID prefix from checkin blob.
+										// The beacon identifies children by SmbUUID (first 8 chars of checkin UUID),
+										// but the server assigns a random agent ID. Exchange needs the original.
+										if len(childData) >= 8 {
+											originalUUID := string(childData[:8])
+											_ = ts.TsExtenderDataSave("kharon_pivot_map", childAgentId, []byte(originalUUID))
+										}
+
 										err = ts.TsPivotCreate(task.TaskId, agentData.Id, childAgentId, "", false)
 										_ = err
 
