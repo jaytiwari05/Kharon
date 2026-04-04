@@ -154,6 +154,11 @@ var (
 	// agentData is the outer HTTP parent — not the SMB child that actually did the link.
 	// This map lets us find the real parent.
 	TaskOwnerMap = make(map[string]string)
+
+	// SmbPipeName stores the pipe name from the SMB listener config.
+	// Updated during Generate() when building an SMB beacon.
+	// Used by CreateTask to auto-resolve pipe name for "link smb <target>".
+	SmbPipeName = "kharon_c2"
 )
 
 func (p *PluginAgent) GetExtender() ax.ExtenderAgent {

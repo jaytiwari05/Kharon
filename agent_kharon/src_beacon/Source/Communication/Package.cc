@@ -818,7 +818,7 @@ auto DECLFN Package::SendOut(
     _In_ INT32 Length
 ) -> BOOL {
     // SMB: append to PostJobs as MSG_OUT entry instead of calling Transmit
-    // (calling Transmit during ExecuteAll steals the SmbSend Call 2 pipe)
+    // (batching avoids interleaved writes on the persistent pipe)
     if ( Self->Tsp->Pipe.Name && Self->Jbs->PostJobs ) {
         this->Int32( Self->Jbs->PostJobs, (INT32)Action::Task::QuickOut );
         this->Pad( Self->Jbs->PostJobs, (UCHAR*)Self->Jbs->CurrentUUID, 36 );
@@ -905,7 +905,7 @@ auto DECLFN Package::FmtMsg(
     this->Str(Package, MsgBuff);
 
     // SMB: append to PostJobs as MSG_QUICK entry instead of calling Transmit
-    // (calling Transmit during ExecuteAll steals the SmbSend Call 2 pipe)
+    // (batching avoids interleaved writes on the persistent pipe)
     if ( Self->Tsp->Pipe.Name ) {
         if ( Self->Jbs->PostJobs ) {
             this->Int32( Self->Jbs->PostJobs, (INT32)Action::Task::QuickMsg );

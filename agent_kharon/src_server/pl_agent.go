@@ -269,6 +269,7 @@ func AgentGenerateBuild(agentConfig string, agentProfile []byte, listenerMap map
 		if pipename == "<nil>" || pipename == "" {
 			pipename = "kharon_c2"
 		}
+		SmbPipeName = pipename // persist for CreateTask auto-resolution
 		// Build pipe path and convert to C byte array (avoids Make/Shell escaping issues)
 		pipePath := fmt.Sprintf("\\\\.\\pipe\\%s", pipename)
 		pipeBytes := append([]byte(pipePath), 0x00) // null-terminated
@@ -1933,10 +1934,9 @@ func CreateTask(ts Teamserver, agent ax.AgentData, args map[string]any) (ax.Task
 				err = errors.New("parameter 'target' is required")
 				goto RET
 			}
-			pipename, ok := args["pipename"].(string)
-			if !ok || pipename == "" {
-				err = errors.New("parameter 'pipename' is required")
-				goto RET
+			pipename, _ := args["pipename"].(string)
+			if pipename == "" {
+				pipename = SmbPipeName // auto-resolve from SMB listener config
 			}
 
 			// Build the full pipe path: \\target\pipe\pipename
