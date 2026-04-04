@@ -1476,10 +1476,12 @@ public:
         PVOID  Node;
         PCHAR  Name;
         HANDLE Handle;
+        BOOL   TasksRead;  // TRUE after Call 1 reads tasks, reset after Call 2 writes results
     } Pipe = {
-        .Node   = nullptr,
-        .Name   = nullptr,
-        .Handle = nullptr
+        .Node      = nullptr,
+        .Name      = nullptr,
+        .Handle    = nullptr,
+        .TasksRead = FALSE
     };
 
     auto Checkin( VOID ) -> BOOL;

