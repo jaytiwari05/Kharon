@@ -555,6 +555,12 @@ function GenerateUI(listenerType)
         container_smb.put("mask_heap", heap_obf_check);
         container_smb.put("mask_sleep", sleep_mask_combo);
 
+        // PE/loader keys (required by pl_agent.go for Exe/Dll/Svc builds — defaults from hidden widgets)
+        container_smb.put("pe_section", section_combo);
+        container_smb.put("encryption_technique", encryption_combo);
+        container_smb.put("injection_technique", injection_combo);
+        container_smb.put("custom_section_name", textCustomSection);
+
         let panel_smb = form.create_panel();
         panel_smb.setLayout(layout_smb);
         return {
